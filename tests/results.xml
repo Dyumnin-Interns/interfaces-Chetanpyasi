@@ -1,0 +1,6 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1747237544" />
+    <testcase name="dut_test" classname="dut_test" file="/home/kali/Work/interfaces-Chetanpyasi/tests/dut_test.py" lineno="48" time="1.2770195007324219" sim_time_ns="249600.001" ratio_time="195455.1209725806" />
+  </testsuite>
+</testsuites>

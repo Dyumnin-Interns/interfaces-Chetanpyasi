@@ -1,6 +1,7 @@
 import cocotb
 from cocotb.triggers import RisingEdge,Timer,NextTimeStep,ReadOnly,FallingEdge
 from cocotb_coverage.coverage import CoverCross, CoverPoint, coverage_db
+from cocotb.result    import TestFailure
 from cocotb_bus.drivers import BusDriver
 from cocotb_bus.monitors import BusMonitor
 import random
@@ -44,7 +45,21 @@ def out_port_cover(TxnRead_ds):
 @CoverPoint("top.read_address", xf=lambda x: x, bins=[0, 1, 2, 3])
 def read_address_cover(address):
 	pass
-	
+
+async def wait_until(cond_fn, clk, max_cycles=2_000_000):
+	"""
+	Wait until cond_fn() returns True, sampling on each rising edge of clk.
+	Raises an exception if the condition is not met within max_cycles.
+	"""
+	for cycle in range(max_cycles):
+		await RisingEdge(clk)
+		if cond_fn():
+			return              # finished successfully
+		await NextTimeStep()    # let other coroutines settle
+	raise cocotb.result.TestFailure(
+		f"Timeout: condition not satisfied after {max_cycles} cycles"
+	)
+
 @cocotb.test()
 async def dut_test(dut):
 	global expected_value, failed_tests
@@ -79,9 +94,12 @@ async def dut_test(dut):
 		ab_cover(a, b)
 
 		# 100 cycles to complete the execution for delayed_dut
-		for j in range(100):
-			await RisingEdge(dut.CLK)
-			await NextTimeStep()
+		await wait_until(
+			lambda: dut.read_rdy.value == 1 and dut.read_data.value is not None,
+			dut.CLK,
+			max_cycles=2_000_000,   # tweak as needed
+		)
+
 
 		# Hit all read addresses 0–3 (normal working)
 		for addr in range(4):
@@ -108,6 +126,8 @@ async def dut_test(dut):
 	elif expected_value:
 		raise Exception(f"Test run incomplete: {len(expected_value)} expected value(s) were not validated.")
 	print("All test cases passed successfully!")
+	coverage_db.export_to_xml(filename="coverage_results.xml")
+
 
 
 class InputDrivers(BusDriver):
@@ -149,33 +169,33 @@ class InputMonitor(BusMonitor):
 
 
 class OutputDrivers(BusDriver):
-    _signals = ["read_en", "read_address", "read_data", "read_rdy"]
+	_signals = ["read_en", "read_address", "read_data", "read_rdy"]
 
-    def __init__(self, dut, name, clk, sb_callback):
-        super().__init__(dut, name, clk)
-        self.bus.read_en.value = 0
-        self.bus.read_address.value = 0
-        self.clk = clk
-        self.callback = sb_callback
+	def __init__(self, dut, name, clk, sb_callback):
+		super().__init__(dut, name, clk)
+		self.bus.read_en.value = 0
+		self.bus.read_address.value = 0
+		self.clk = clk
+		self.callback = sb_callback
 
-    async def _driver_sent(self, address, sync=True):
-        for k in range(random.randint(1, 200)):
-            await RisingEdge(self.clk)
-        while not self.bus.read_rdy.value:
-            await RisingEdge(self.clk)
-        self.bus.read_en.value = 1
-        self.bus.read_address.value = address
-        await ReadOnly()
+	async def _driver_sent(self, address, sync=True):
+		for k in range(random.randint(1, 200)):
+			await RisingEdge(self.clk)
+		while not self.bus.read_rdy.value:
+			await RisingEdge(self.clk)
+		self.bus.read_en.value = 1
+		self.bus.read_address.value = address
+		await ReadOnly()
 
-        # Check scoreboard for y_output (address 3)
-        if self.callback and address == 3:
-            self.callback(int(self.bus.read_data.value))
-        elif address in [0, 1, 2]:
-            cocotb.log.info(f"address={address}, value={int(self.bus.read_data.value)}")
+		# Check scoreboard for y_output (address 3)
+		if self.callback and address == 3:
+			self.callback(int(self.bus.read_data.value))
+		elif address in [0, 1, 2]:
+			cocotb.log.info(f"address={address}, value={int(self.bus.read_data.value)}")
 
-        await RisingEdge(self.clk)
-        await NextTimeStep()
-        self.bus.read_en.value = 0
+		await RisingEdge(self.clk)
+		await NextTimeStep()
+		self.bus.read_en.value = 0
 			
 class OutputMonitor(BusMonitor):
 	_signals = ["read_en", "read_address", "read_data", "read_rdy"]

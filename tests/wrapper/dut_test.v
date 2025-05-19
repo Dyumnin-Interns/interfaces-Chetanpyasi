@@ -24,13 +24,6 @@ module dut_test(CLK,
   input  read_en;
   output read_data;
   output read_rdy;
-
-  // signals for module outputs
-  reg read_data;
-  wire read_rdy, write_rdy;
-
-  // inlined wires
-  wire a_data$whas, b_data$whas, pwyff_deq$whas;
 dut dut(.CLK(CLK),
 	   .RST_N(RST_N),
 

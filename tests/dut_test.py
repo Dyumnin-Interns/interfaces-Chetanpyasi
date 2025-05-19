@@ -1,5 +1,5 @@
 import cocotb
-from cocotb.triggers import RisingEdge,Timer,NextTimeStep,ReadOnly,FallingEdge
+from cocotb.triggers import RisingEdge,Timer,NextTimeStep,ReadOnly,FallingEdge, Event, with_timeout
 from cocotb_coverage.coverage import CoverCross, CoverPoint, coverage_db
 from cocotb.result    import TestFailure
 from cocotb_bus.drivers import BusDriver
@@ -9,7 +9,7 @@ import random
 
 failed_tests = 0
 expected_value = []
-
+result_ready = Event()  
 
 def sb_fn(actual_value):
 	global expected_value, failed_tests
@@ -46,19 +46,14 @@ def out_port_cover(TxnRead_ds):
 def read_address_cover(address):
 	pass
 
-async def wait_until(cond_fn, clk, max_cycles=2_000_000):
-	"""
-	Wait until cond_fn() returns True, sampling on each rising edge of clk.
-	Raises an exception if the condition is not met within max_cycles.
-	"""
-	for cycle in range(max_cycles):
-		await RisingEdge(clk)
-		if cond_fn():
-			return              # finished successfully
-		await NextTimeStep()    # let other coroutines settle
-	raise cocotb.result.TestFailure(
-		f"Timeout: condition not satisfied after {max_cycles} cycles"
-	)
+async def wait_for_result(timeout_ns=5_000_000):
+	"""Suspend until `result_ready` is fired, or timeout in ns."""
+	try:
+		await with_timeout(result_ready.wait(), timeout_ns, 'ns')
+	except cocotb.result.SimTimeoutError:
+		raise cocotb.result.TestFailure(
+			f"Timeout: result not seen within {timeout_ns} ns"
+		)
 
 @cocotb.test()
 async def dut_test(dut):
@@ -92,19 +87,22 @@ async def dut_test(dut):
 		await write_drv._driver_sent(4, a)
 		await write_drv._driver_sent(5, b)
 		ab_cover(a, b)
+		
 
-		# 100 cycles to complete the execution for delayed_dut
-		await wait_until(
-			lambda: dut.read_rdy.value == 1 and dut.read_data.value is not None,
-			dut.CLK,
-			max_cycles=2_000_000,   # tweak as needed
-		)
+		
+
+		
 
 
 		# Hit all read addresses 0–3 (normal working)
 		for addr in range(4):
 			read_address_cover(addr)
 			await read_drv._driver_sent(addr)
+			
+		
+		cocotb.log.info("→ waiting for result …")
+		await wait_for_result()
+		cocotb.log.info("→ result seen, reading addr 3")
 			
 	#Setting the fifo-a full flag
 	await write_drv._driver_sent(4, a)
@@ -187,6 +185,7 @@ class OutputDrivers(BusDriver):
 		self.bus.read_address.value = address
 		await ReadOnly()
 
+		await RisingEdge(self.clk)
 		# Check scoreboard for y_output (address 3)
 		if self.callback and address == 3:
 			self.callback(int(self.bus.read_data.value))
@@ -211,3 +210,7 @@ class OutputMonitor(BusMonitor):
 			if stateR:
 				out_port_cover({'previousRead': prevR, 'currentRead': stateR})
 				prevR = stateR
+			if (int(self.bus.read_en.value) and int(self.bus.read_rdy.value) and int(self.bus.read_address.value) == 3):
+				cocotb.log.info("Y ready → firing result_ready")
+				result_ready.set()        # wake waiters
+				
